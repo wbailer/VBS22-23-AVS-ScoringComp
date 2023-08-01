@@ -30,32 +30,61 @@ def read_data(submission_file, score_file):
 	
     return subm, scores
 	
+def merge_ranges(ranges,overlap):
+
+    if len(ranges)==0:
+        return []
+		
+    pairs = ranges
+    pairs.sort(key=lambda x: x[0])
+	
+    i = 1
+    current = pairs[0]
+	
+    merged = []
+ 
+    while i < len(pairs):
+
+        next = pairs[i]
+
+        # if overlapping, merge
+        if current[1] + overlap >= next[0]:
+            current[1] = next[1]
+		# add to list and continue
+        else:
+            merged.append(current)
+            continue
+        i = i+1
+    merged.append(current)
+		
+    return merged
+	
 def countQuantized(corr):
 
-        # return submissions.filterIsInstance<ItemAspect>().groupBy { it.item }.map {
-            # when(it.key) {
-                # is MediaItem.ImageItem -> 1
-                # is MediaItem.VideoItem -> {
-                    # val ranges = it.value.map { s -> (s as Submission.Temporal).temporalRange }
-                    # TimeUtil.merge(ranges, overlap = 1).size
-                # }
-            # }
-        # }.sum()
+    cnt = 0
 
-    return 0
+    ranges = []	
+
+    for index, row in corr.iterrows():
+	
+        r = [int(row['start']),int(row['ending'])]
+        ranges.append(r)
+    
+	
+    return len(merge_ranges(ranges,1))
+	
 
 
 def AVS_scorer(subm):
-
 
     scores = {}
     for task in subm['task'].unique():
         scores[task] = {}
 
-        correctSubmissions = subm.loc[subm['status']=='CORRECT' and subm['task']==task]
-        wrongSubmissions = subm.loc[subm['status']=='WRONG' and subm['task']==task]
+        correctSubmissions = subm.loc[np.logical_and(subm['status']=='CORRECT', subm['task']==task)]
+        wrongSubmissions = subm.loc[np.logical_and(subm['status']=='WRONG' , subm['task']==task)]
 	
-        totalCorrectQuantized = double(countQuantized(correctSubmissions))
+        totalCorrectQuantized = float(countQuantized(correctSubmissions))
 
         for team in subm['team'].unique():
             scores[team] = 0.0
@@ -67,106 +96,61 @@ def AVS_scorer(subm):
             wrongSubs = wrongSubmissions.loc[wrongSubmissions['team'==team]]
             wrong = len(wrongSubs)
 		
-            scores[task][team] = 100.0 * (correct / (correct + wrong / 2.0)) * (double(countQuantized(correctSubs)) / totalCorrectQuantized)
+            scores[task][team] = 100.0 * (correct / (correct + wrong / 2.0)) * (float(countQuantized(correctSubs)) / totalCorrectQuantized)
       	
-    return {}
+    return scores
 
 def AVS2_scorer(subm):
 
+    defaultPenalty = 0.2
+    defaultMaxPointsPerTask = 1000.0
 
-    # constructor(parameters: Map<String, String>) : this(
-        # abs(
-            # parameters.getOrDefault("penalty", "$defaultPenalty").toDoubleOrNull() ?: defaultPenalty
-        # ),
-        # parameters.getOrDefault("maxPointsPerTask", "$defaultMaxPointsPerTask").toDoubleOrNull()
-            # ?: defaultMaxPointsPerTask
-    # )
+    scores = {}
+    for task in subm['task'].unique():
+        scores[task] = {}
+	
+        correctSubmissions = subm.loc[np.logical_and(subm['status']=='CORRECT' , subm['task']==task)]
+        wrongSubmissions = subm.loc[np.logical_and(subm['status']=='WRONG' , subm['task']==task)]
 
-    # constructor() : this(defaultPenalty, defaultMaxPointsPerTask)
+        distinctCorrectVideos = len( correctSubmissions['item'].unique())  	
 
-    # companion object {
-        # const val defaultPenalty: Double = 0.2
-        # private const val defaultMaxPointsPerTask: Double = 1000.0
+		
+        for team in subm['team'].unique():
+            scores[team] = 0.0
 
-        # /**
-         # * Sanitised team scores: Either the team has score 0.0 (no submission) or the calculated score
-         # */
-        # fun teamScoreMapSanitised(scores: Map<TeamId, Double>, teamIds: Collection<TeamId>): Map<TeamId, Double> {
+            subm_task_team = subm.loc[np.logical_and(subm['task']==task , subm['team']==team)]
+			 
+            for video in subm_task_team['item'].unique():
+			
+                subm_task_team_vid = subm.loc[subm_task_team['item']==video]
+			
+                subm_task_team_srt = subm_task_team_vid.sort_values(['time'])
+                subm_task_team_srt = subm_task_team_srt.reset_index(drop=True)
 
-            # val cleanMap = teamIds.associateWith { 0.0 }.toMutableMap()
+                sc = 0	
+			
+                if len(subm_task_team_srt[subm['status']=='CORRECT'])==0:
+                   sc = len(subm_task_team_srt) * -penaltyConstant
+                else:
+                    firstCorrectIdx = subm_task_team_srt[subm['status']=='CORRECT'].iloc[0]
+                    sc = 1.0 - firstCorrectIdx * penaltyConstant
+	
+                scores[team] = scores[team] + max(0,sc) 
+				
+            scores[team] = score[team] / distinctCorrectVideos * maxPointsPerTask 
 
-            # scores.forEach { (teamId, score) ->
-                # cleanMap[teamId] = max(0.0, score)
-            # }
-
-            # return cleanMap
-        # }
-
-    # }
-
-    # override fun computeScores(
-        # submissions: Collection<Submission>,
-        # context: TaskContext
-    # ): Map<TeamId, Double> {
-
-        # val distinctCorrectVideos =
-            # submissions.mapNotNullTo(mutableSetOf()) {//map directly to set and filter in one step
-                # if (it !is ItemAspect || it.status != SubmissionStatus.CORRECT) {
-                    # null//filter all incorrect submissions
-                # } else {
-                    # it.item.id
-                # }
-            # }.size
-
-        # //no correct submissions yet
-        # if (distinctCorrectVideos == 0) {
-            # lastScores = this.lastScoresLock.write {
-                # teamScoreMapSanitised(mapOf(), context.teamIds)
-            # }
-            # this.lastScoresLock.read {
-                # return lastScores
-            # }
-        # }
-
-        # lastScores = this.lastScoresLock.write {
-            # teamScoreMapSanitised(
-                # submissions.filter {
-                    # it is ItemAspect &&
-                            # (it.status == SubmissionStatus.CORRECT || it.status == SubmissionStatus.WRONG)
-                # }.groupBy { it.teamId }
-                    # .map { submissionsPerTeam ->
-                        # submissionsPerTeam.key to
-                                # max(0.0, //prevent negative total scores
-                                    # submissionsPerTeam.value.groupBy { submission ->
-                                        # submission as ItemAspect
-                                        # submission.item.id
-                                    # }.map {
-                                        # val firstCorrectIdx = it.value.sortedBy { s -> s.timestamp }
-                                            # .indexOfFirst { s -> s.status == SubmissionStatus.CORRECT }
-                                        # if (firstCorrectIdx < 0) { //no correct submissions, only penalty
-                                            # it.value.size * -penaltyConstant
-                                        # } else { //apply penalty for everything before correct submission
-                                            # 1.0 - firstCorrectIdx * penaltyConstant
-                                        # }
-                                    # }.sum() / distinctCorrectVideos * maxPointsPerTask //normalize
-                                # )
-                    # }.toMap(), context.teamIds
-            # )
-        # }
-        # this.lastScoresLock.read {
-            # return lastScores
-        # }
-    # }
-
-
-   return {}
+    return scores
 
 	
 	
 # main
 subm23, score23 = read_data(filenames['2023'][0],filenames['2023'][1])
 
-print(score23)
+rescore23_22 = AVS_scorer(subm23)
+
+rescore23_22 = AVS_scorer(subm23)
+
+
 
 	
 	
