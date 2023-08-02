@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
 import json
+import copy
 
-import plotly.express as px
-
+from scipy import stats
 
 filenames = {}
 filenames['2022'] = ['../VBS22-AVS-Analysis/data/avs-submissions.csv','']
@@ -35,7 +35,7 @@ def merge_ranges(ranges,overlap):
     if len(ranges)==0:
         return []
 		
-    pairs = ranges
+    pairs = copy.deepcopy(ranges)
     pairs.sort(key=lambda x: x[0])
 	
     i = 1
@@ -56,22 +56,29 @@ def merge_ranges(ranges,overlap):
             current = next
         i = i+1
     merged.append(current)
+	
 		
     return merged
 	
 def countQuantized(corr):
 
-    cnt = 0
-
-    ranges = []	
-
-    for index, row in corr.iterrows():
+    cq = 0
 	
-        r = [int(row['start']),int(row['ending'])]
-        ranges.append(r)
+    for item in corr['item'].unique():
+	
+        corr_item = corr.loc[corr['item']==item]
+
+        ranges = []	
+		
+        for index, row in corr_item.iterrows():
+	
+            r = [int(row['start']),int(row['ending'])]
+            ranges.append(r)
     
 	
-    return len(merge_ranges(ranges,1))
+        cq =cq + len(merge_ranges(ranges,1))
+	
+    return cq
 	
 
 
@@ -85,9 +92,9 @@ def AVS_scorer(subm):
         wrongSubmissions = subm.loc[np.logical_and(subm['status']=='WRONG' , subm['task']==task)]
 	
         totalCorrectQuantized = float(countQuantized(correctSubmissions))
-
+		
         for team in subm['team'].unique():
-            scores[team] = 0.0
+            scores[task][team] = 0.0
 
             if len(correctSubmissions['team']==team)>0:
                 correctSubs = correctSubmissions.loc[correctSubmissions['team']==team]
@@ -100,8 +107,14 @@ def AVS_scorer(subm):
                 wrong = len(wrongSubs)
             else:
                 wrong = 0
-		
-            scores[task][team] = 100.0 * (correct / (correct + wrong / 2.0)) * (float(countQuantized(correctSubs)) / totalCorrectQuantized)
+	
+            if correct+wrong==0:
+                continue			
+				
+            correctq = countQuantized(correctSubs)
+	
+            scores[task][team] = 100.0 * (correct / (correct + wrong / 2.0)) * (float(correctq) / totalCorrectQuantized)
+
       	
     return scores
 
@@ -159,9 +172,6 @@ def compare_scores(s1,s2):
 
             if team not in s2[task].keys():
                 continue
-            print(task,team)
-            print(s1[task][team])
-            print(s2[task][team])
 				
             diff[task][team] = s1[task][team]-s2[task][team]
             sum = sum + diff[task][team]
@@ -171,31 +181,131 @@ def compare_scores(s1,s2):
 			
     return diff, sum/nsc
     
+def sum_per_team(scores,normalise=False):
+
+    tsc = {}
+    maxsc = 0
+
+    for task in scores.keys():
+		
+        for team in scores[task].keys():
+            if team in tsc.keys():
+                tsc[team] = tsc[team] + scores[task][team]
+            else:
+                tsc[team] = scores[task][team]
+            if tsc[team]>maxsc:
+                maxsc = tsc[team]
+			
+    if normalise:			
+        for team in tsc.keys():
+            tsc[team] = tsc[team] / maxsc * 100
+				
+    return tsc
+	
+def get_ranks(scores,teamlist):
+
+    # make sure to sort by teamlist to have the same order
+    vlist = np.zeros((len(teamlist),))
+	
+    i=0
+    for team in teamlist:
+
+        vlist[i] = scores[team]
+        i=i+1
+
+	
+    indices = list(range(len(vlist)))
+    indices.sort(key=lambda x: vlist[x])
+    ranks = [0] * len(indices)
+    for i, x in enumerate(indices):
+        ranks[x] = len(teamlist)-i
+		
+    return ranks
+	
+def get_rank_correlation(scores1,scores2,teamlist):
+
+    # make sure to sort by teamlist to have the same order
+    vlist1 = np.zeros((len(teamlist),))
+    vlist2 = np.zeros((len(teamlist),))
+	
+    i=0
+    for team in teamlist:
+
+        vlist1[i] = scores1[team]
+        vlist2[i] = scores2[team]
+        i=i+1
+	
+    res = stats.spearmanr(vlist1,vlist2)
+
+
+    return res.correlation
+	
+def get_all_rank_correlations(taskscores1,summedscores1,taskscores2,summedscores2,teamlist,prefix):
+
+    correl = {}
+	
+    correl[prefix+'_all'] = get_rank_correlation(summedscores1,summedscores2, teamlist)
+	
+    for task in taskscores1.keys():	
+        correl[prefix+'_'+task] = get_rank_correlation(taskscores1[task],taskscores2[task], teamlist)
+
+    return correl
 	
 	
 # MAIN
 # --------
 
 # load data
+subm22, score22 = read_data(filenames['2022'][0],filenames['2022'][1])
 subm23, score23 = read_data(filenames['2023'][0],filenames['2023'][1])
 
 # rescore
 
-rescore23_22 = AVS_scorer(subm23)
+rescore22_22 = AVS_scorer(subm22)
+rescore22_23 = AVS2_scorer(subm22)
 
+rescore23_22 = AVS_scorer(subm23)
 rescore23_23 = AVS2_scorer(subm23)
 
-# compare loaded scores and rescorded data with same function
-
+# compare loaded scores and rescorded data for 2023
 d23_23,m23_23 = compare_scores(score23,rescore23_23)
 
-print(d23_23)
-print(m23_23)
+#get overall scores
+summed22_22 = sum_per_team(rescore22_22)
+summed22_23 = sum_per_team(rescore22_23)
 
+summed23_22 = sum_per_team(rescore23_22)
+summed23_23 = sum_per_team(rescore23_23)
 
+# get ranks
 
+ranks_vbs22 = {}
+ranks_vbs23 = {}
 
+ranks_vbs22['vbs22_all_AVS'] = get_ranks(summed22_22, summed22_22.keys())
+ranks_vbs22['vbs22_all_AVS2'] = get_ranks(summed22_23, summed22_22.keys())
 
-	
-	
-	
+ranks_vbs23['vbs23_all_AVS'] = get_ranks(summed23_22, summed23_23.keys())
+ranks_vbs23['vbs23_all_AVS2'] = get_ranks(summed23_23, summed23_23.keys())
+
+for task in rescore22_22:
+    ranks_vbs22[task+'_AVS'] = get_ranks(rescore22_22[task], summed22_22.keys()) 
+    ranks_vbs22[task+'_AVS2'] = get_ranks(rescore22_23[task], summed22_22.keys()) 
+
+for task in rescore23_23:
+    ranks_vbs23[task+'_AVS'] = get_ranks(rescore23_22[task], summed23_23.keys()) 
+    ranks_vbs23[task+'_AVS2'] = get_ranks(rescore23_23[task], summed23_23.keys()) 
+		
+df_vbs22 = pd.DataFrame.from_dict(ranks_vbs22, orient='index', columns = summed22_22.keys())
+df_vbs22.to_csv('results/ranks_vbs22.csv')
+
+df_vbs23 = pd.DataFrame.from_dict(ranks_vbs23, orient='index', columns = summed23_23.keys())
+df_vbs23.to_csv('results/ranks_vbs23.csv')
+
+# get rank correlation coefficients
+correl = get_all_rank_correlations(rescore22_22,summed22_22,rescore22_23,summed22_23,summed22_22.keys(),'vbs22')
+correl23 = get_all_rank_correlations(rescore23_22,summed23_22,rescore23_23,summed23_23,summed23_23.keys(),'vbs23')
+correl.update(correl23)
+
+df_correl = pd.DataFrame.from_dict(correl, orient='index')
+df_correl.to_csv('results/correl.csv')
