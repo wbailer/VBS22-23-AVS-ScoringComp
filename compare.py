@@ -53,7 +53,7 @@ def merge_ranges(ranges,overlap):
 		# add to list and continue
         else:
             merged.append(current)
-            continue
+            current = next
         i = i+1
     merged.append(current)
 		
@@ -89,12 +89,17 @@ def AVS_scorer(subm):
         for team in subm['team'].unique():
             scores[team] = 0.0
 
-
-            correctSubs = correctSubmissions.loc[correctSubmissions['team'==team]]
-            correct = len(correctSubs)
+            if len(correctSubmissions['team']==team)>0:
+                correctSubs = correctSubmissions.loc[correctSubmissions['team']==team]
+                correct = len(correctSubs)
+            else:
+                correct = 0
         
-            wrongSubs = wrongSubmissions.loc[wrongSubmissions['team'==team]]
-            wrong = len(wrongSubs)
+            if len(wrongSubmissions['team']==team)>0:
+                wrongSubs = wrongSubmissions.loc[wrongSubmissions['team']==team]
+                wrong = len(wrongSubs)
+            else:
+                wrong = 0
 		
             scores[task][team] = 100.0 * (correct / (correct + wrong / 2.0)) * (float(countQuantized(correctSubs)) / totalCorrectQuantized)
       	
@@ -102,8 +107,8 @@ def AVS_scorer(subm):
 
 def AVS2_scorer(subm):
 
-    defaultPenalty = 0.2
-    defaultMaxPointsPerTask = 1000.0
+    penaltyConstant = 0.2
+    maxPointsPerTask = 1000.0
 
     scores = {}
     for task in subm['task'].unique():
@@ -116,39 +121,78 @@ def AVS2_scorer(subm):
 
 		
         for team in subm['team'].unique():
-            scores[team] = 0.0
+            scores[task][team] = 0.0
 
             subm_task_team = subm.loc[np.logical_and(subm['task']==task , subm['team']==team)]
 			 
             for video in subm_task_team['item'].unique():
 			
-                subm_task_team_vid = subm.loc[subm_task_team['item']==video]
+                subm_task_team_vid = subm_task_team.loc[np.logical_and(subm_task_team['item']==video,np.logical_or(subm_task_team['status']=='CORRECT',subm_task_team['status']=='WRONG'))]
 			
                 subm_task_team_srt = subm_task_team_vid.sort_values(['time'])
                 subm_task_team_srt = subm_task_team_srt.reset_index(drop=True)
 
                 sc = 0	
-			
-                if len(subm_task_team_srt[subm['status']=='CORRECT'])==0:
-                   sc = len(subm_task_team_srt) * -penaltyConstant
-                else:
-                    firstCorrectIdx = subm_task_team_srt[subm['status']=='CORRECT'].iloc[0]
-                    sc = 1.0 - firstCorrectIdx * penaltyConstant
-	
-                scores[team] = scores[team] + max(0,sc) 
 				
-            scores[team] = score[team] / distinctCorrectVideos * maxPointsPerTask 
+                if len(subm_task_team_srt[subm_task_team_srt['status']=='CORRECT'])==0:
+                    sc = len(subm_task_team_srt) * -penaltyConstant
+                else:
+                    firstCorrectIdx = subm_task_team_srt[subm_task_team_srt['status']=='CORRECT'].index[0]				
+
+                    sc = 1.0 - int(firstCorrectIdx) * penaltyConstant
+	
+                scores[task][team] = scores[task][team] + sc
+				
+            scores[task][team] = max(0,scores[task][team]) / distinctCorrectVideos * maxPointsPerTask 
 
     return scores
 
+def compare_scores(s1,s2):
+    sum = 0.0
+    nsc = 0.0
+
+    diff = {}
+	
+    for task in s1.keys():
+        diff[task] = {}				
+        for team in s1[task].keys():
+
+            if team not in s2[task].keys():
+                continue
+            print(task,team)
+            print(s1[task][team])
+            print(s2[task][team])
+				
+            diff[task][team] = s1[task][team]-s2[task][team]
+            sum = sum + diff[task][team]
+            nsc = nsc + 1
+
+			
+			
+    return diff, sum/nsc
+    
 	
 	
-# main
+# MAIN
+# --------
+
+# load data
 subm23, score23 = read_data(filenames['2023'][0],filenames['2023'][1])
 
-rescore23_22 = AVS_scorer(subm23)
+# rescore
 
 rescore23_22 = AVS_scorer(subm23)
+
+rescore23_23 = AVS2_scorer(subm23)
+
+# compare loaded scores and rescorded data with same function
+
+d23_23,m23_23 = compare_scores(score23,rescore23_23)
+
+print(d23_23)
+print(m23_23)
+
+
 
 
 
